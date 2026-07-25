@@ -1,0 +1,24 @@
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Local secrets / runtime config (never commit)
+pi-bridge.env
+.env
+.env.*
+*.pem
+*.key
+
+# Session data if someone points it into the repo
+/sessions/
+session-index.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

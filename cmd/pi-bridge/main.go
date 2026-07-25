@@ -1,0 +1,190 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+
+	"github.com/cabewaldrop/pi-bridge/internal/config"
+	"github.com/cabewaldrop/pi-bridge/internal/discord"
+	"github.com/cabewaldrop/pi-bridge/internal/pi"
+	"github.com/cabewaldrop/pi-bridge/internal/queue"
+	"github.com/cabewaldrop/pi-bridge/internal/sessionstore"
+	"github.com/cabewaldrop/pi-bridge/internal/setup"
+	"github.com/cabewaldrop/pi-bridge/internal/worker"
+)
+
+func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	if err := run(log, os.Args[1:]); err != nil {
+		log.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run(log *slog.Logger, args []string) error {
+	cmd := "run"
+	if len(args) > 0 {
+		cmd = args[0]
+	}
+
+	switch cmd {
+	case "setup", "init", "configure":
+		res, err := setup.Run(setup.Options{})
+		if err != nil {
+			return err
+		}
+		if !res.StartNow {
+			fmt.Println("Config saved. Start later with: pi-bridge")
+			return nil
+		}
+		// Fall through to bot after setup.
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return runBot(log, cfg)
+
+	case "help", "-h", "--help":
+		printHelp()
+		return nil
+
+	case "run", "start":
+		// continue below
+	default:
+		// Allow unknown args only if they look like flags; otherwise help.
+		if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+			printHelp()
+			return fmt.Errorf("unknown command %q", args[0])
+		}
+	}
+
+	cfg, err := config.Load()
+	if errors.Is(err, config.ErrMissingToken) {
+		fmt.Println("No Discord token found — starting setup wizard.")
+		fmt.Println()
+		res, werr := setup.Run(setup.Options{})
+		if werr != nil {
+			return werr
+		}
+		if !res.StartNow {
+			fmt.Println("Config saved. Start later with: pi-bridge")
+			return nil
+		}
+		cfg, err = config.Load()
+	}
+	if err != nil {
+		return err
+	}
+	return runBot(log, cfg)
+}
+
+func runBot(log *slog.Logger, cfg config.Config) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	q := queue.NewMemory(cfg.QueueSize)
+
+	var store *sessionstore.Store
+	if cfg.PersistSessions {
+		var err error
+		store, err = sessionstore.Open(cfg.SessionIndexPath)
+		if err != nil {
+			return fmt.Errorf("session index: %w", err)
+		}
+		log.Info("session persistence enabled",
+			"index", cfg.SessionIndexPath,
+			"sessions", cfg.SessionDir,
+		)
+	} else {
+		log.Info("session persistence disabled (ephemeral pi sessions)")
+	}
+
+	persist := cfg.PersistSessions
+	pool := pi.NewPool(pi.PoolOptions{
+		Binary:     cfg.PiBinary,
+		ExtraArgs:  cfg.PiArgs,
+		SessionDir: cfg.SessionDir,
+		Store:      store,
+		Persist:    &persist,
+		Log:        log,
+	})
+	defer pool.Close()
+
+	bot, err := discord.New(discord.Config{
+		Token:           cfg.DiscordToken,
+		AllowedGuildIDs: cfg.AllowedGuildIDs,
+		RequireMention:  cfg.RequireMention,
+		DefaultCWD:      cfg.DefaultCWD,
+	}, q, log)
+	if err != nil {
+		return fmt.Errorf("discord bot: %w", err)
+	}
+
+	if err := bot.Open(); err != nil {
+		return fmt.Errorf("discord open: %w", err)
+	}
+	defer bot.Close()
+
+	var wg sync.WaitGroup
+	for i := 0; i < cfg.Workers; i++ {
+		w := &worker.Worker{
+			ID:      fmt.Sprintf("w%d", i+1),
+			Queue:   q,
+			Pool:    pool,
+			Sink:    bot,
+			Timeout: cfg.JobTimeout,
+			Log:     log,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := w.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Error("worker stopped", "worker", w.ID, "err", err)
+			}
+		}()
+	}
+
+	log.Info("pi-bridge running",
+		"workers", cfg.Workers,
+		"cwd", cfg.DefaultCWD,
+		"queue", cfg.QueueSize,
+		"config", cfg.ConfigPath,
+	)
+	fmt.Println()
+	fmt.Println("Bot is online. In Discord, try:  @your-bot hello")
+	fmt.Println("Press Ctrl+C to stop.")
+	fmt.Println()
+
+	<-ctx.Done()
+	log.Info("shutting down")
+	q.Close()
+	wg.Wait()
+	return nil
+}
+
+func printHelp() {
+	fmt.Print(`pi-bridge — Discord front-end for the pi coding agent
+
+Usage:
+  pi-bridge           Start the bot (launches setup if unconfigured)
+  pi-bridge setup     Re-run the guided Discord setup wizard
+  pi-bridge help      Show this help
+
+Install from this repo:
+  go install ./cmd/pi-bridge
+
+Config is loaded from (first match wins for file discovery):
+  $PI_BRIDGE_CONFIG
+  ./pi-bridge.env
+  $XDG_CONFIG_HOME/pi-bridge/config.env   (or ~/Library/Application Support/pi-bridge on macOS)
+
+Environment variables always override the config file.
+`)
+}

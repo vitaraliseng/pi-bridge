@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent for pi-bridge.
+
+  Install:
+    1. Edit ProgramArguments / PATH / HOME paths below for your machine
+    2. cp deploy/com.pi-bridge.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.pi-bridge.plist
+    4. launchctl start com.pi-bridge
+
+  Logs: /tmp/pi-bridge.stdout.log  and  /tmp/pi-bridge.stderr.log
+
+  Stop:
+    launchctl stop com.pi-bridge
+    launchctl unload ~/Library/LaunchAgents/com.pi-bridge.plist
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.pi-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <!-- Must be an absolute path to the installed binary -->
+      <string>/Users/YOU/go/bin/pi-bridge</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <!-- Ensure pi and other tools are findable -->
+      <key>PATH</key>
+      <string>/Users/YOU/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <key>HOME</key>
+      <string>/Users/YOU</string>
+      <!-- Optional overrides:
+      <key>PI_CWD</key>
+      <string>/Users/YOU/dev/some-project</string>
+      -->
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/pi-bridge.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/pi-bridge.stderr.log</string>
+  </dict>
+</plist>
