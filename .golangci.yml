@@ -1,0 +1,126 @@
+# https://golangci-lint.run/usage/configuration/
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # Standard analysis
+    - govet
+    - ineffassign
+    - misspell
+    - unused
+    - errcheck
+    - staticcheck
+
+    # Style / hygiene
+    - revive
+    - unconvert
+    - unparam
+    - nakedret
+    - prealloc
+    - copyloopvar
+
+    # Security
+    - gosec
+
+    # Ensure nolint directives are intentional
+    - nolintlint
+
+  exclusions:
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - unparam
+      # User-facing / log messages are intentionally capitalized.
+      - linters:
+          - staticcheck
+        text: "ST1005:"
+
+  settings:
+    misspell:
+      locale: US
+
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (*bufio.Writer).Flush
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Println
+        - fmt.Printf
+        - os.Remove
+        - os.RemoveAll
+        - os.Setenv
+        - os.Unsetenv
+        - os.Chdir
+
+    gosec:
+      excludes:
+        - G104 # covered by errcheck
+        - G301 # config/session dirs use 0700 intentionally
+        - G302 # config files use 0600 intentionally
+        - G306 # WriteFile perms intentional for secrets/config
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true # small internal CLI; exported docs optional
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+          disabled: true
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+          disabled: true
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    nakedret:
+      max-func-lines: 40
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/vitaraliseng/pi-bridge
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

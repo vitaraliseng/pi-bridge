@@ -46,6 +46,20 @@ go install ./cmd/pi-bridge
 
 Ensure `$(go env GOPATH)/bin` is on your `PATH`.
 
+### Lint / test
+
+```bash
+make test
+make lint          # golangci-lint
+make lint-fix     # auto-fix gofmt/goimports where possible
+```
+
+Install the linter (once):
+
+```bash
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+```
+
 ### Releasing (maintainers)
 
 Tags matching `v*` trigger GoReleaser via GitHub Actions:

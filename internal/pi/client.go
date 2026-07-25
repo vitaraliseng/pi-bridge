@@ -314,8 +314,9 @@ func (c *Client) handleEvent(ctx context.Context, ev Event, emit func(Progress))
 		}
 		emit(Progress{Kind: ProgressStatus, Message: "Skipped an interactive prompt (headless mode)"})
 		_, err := c.Call(ctx, Command{
-			"type":      "extension_ui_response",
-			"id":        id,
+			"type": "extension_ui_response",
+			"id":   id,
+			//nolint:misspell // pi RPC field name uses British spelling
 			"cancelled": true,
 		})
 		return err

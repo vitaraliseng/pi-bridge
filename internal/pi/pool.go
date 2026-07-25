@@ -37,7 +37,7 @@ type entry struct {
 
 // PoolOptions configures session process reuse and persistence.
 type PoolOptions struct {
-	Binary     string
+	Binary string
 	// ExtraArgs are appended to every pi invocation (from PI_ARGS).
 	// If they include --no-session, persistence is disabled.
 	ExtraArgs  []string

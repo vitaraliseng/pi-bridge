@@ -99,10 +99,10 @@ func code(s string) string {
 	return "`" + s + "`"
 }
 
-func truncateRunes(s string, max int) string {
+func truncateRunes(s string, limit int) string {
 	r := []rune(s)
-	if max < 1 || len(r) <= max {
+	if limit < 1 || len(r) <= limit {
 		return s
 	}
-	return string(r[:max-1]) + "…"
+	return string(r[:limit-1]) + "…"
 }

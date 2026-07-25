@@ -1,7 +1,8 @@
-.PHONY: build install test clean
+.PHONY: build install test lint lint-fix vet clean
 
 PREFIX ?= $(HOME)/go
 BINDIR ?= $(PREFIX)/bin
+GOLANGCI_LINT ?= golangci-lint
 
 build:
 	go build -o bin/pi-bridge ./cmd/pi-bridge
@@ -14,6 +15,15 @@ install:
 
 test:
 	go test ./...
+
+vet:
+	go vet ./...
+
+lint:
+	$(GOLANGCI_LINT) run ./...
+
+lint-fix:
+	$(GOLANGCI_LINT) run --fix ./...
 
 clean:
 	rm -rf bin

@@ -388,9 +388,9 @@ func threadName(content, username string) string {
 	return name
 }
 
-func chunkRunes(s string, max int) []string {
-	if max < 1 {
-		max = 1900
+func chunkRunes(s string, limit int) []string {
+	if limit < 1 {
+		limit = 1900
 	}
 	runes := []rune(s)
 	if len(runes) == 0 {
@@ -398,7 +398,7 @@ func chunkRunes(s string, max int) []string {
 	}
 	var out []string
 	for len(runes) > 0 {
-		n := max
+		n := limit
 		if n > len(runes) {
 			n = len(runes)
 		}

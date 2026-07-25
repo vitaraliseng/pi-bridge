@@ -27,7 +27,7 @@ type Worker struct {
 	Log     *slog.Logger
 }
 
-// Run blocks until ctx is cancelled or the queue closes.
+// Run blocks until ctx is canceled or the queue closes.
 func (w *Worker) Run(ctx context.Context) error {
 	if w.Log == nil {
 		w.Log = slog.Default()
