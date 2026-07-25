@@ -20,34 +20,44 @@ Discord mention/DM/thread
 
 ## Install
 
-From this repo:
+### Homebrew (after first release)
+
+```bash
+brew install cabewaldrop/tap/pi-bridge
+```
+
+### Go
+
+```bash
+go install github.com/cabewaldrop/pi-bridge/cmd/pi-bridge@latest
+```
+
+### From a GitHub Release
+
+Binaries for macOS/Linux/Windows are attached to each [release](https://github.com/cabewaldrop/pi-bridge/releases).
+
+### From this repo
 
 ```bash
 cd pi-bridge
 go install ./cmd/pi-bridge
+# or: make install
 ```
 
-That puts a `pi-bridge` binary in `$(go env GOPATH)/bin` (usually `~/go/bin`).
+Ensure `$(go env GOPATH)/bin` is on your `PATH`.
 
-Make sure that directory is on your `PATH`:
+### Releasing (maintainers)
+
+Tags matching `v*` trigger GoReleaser via GitHub Actions:
 
 ```bash
-# zsh/bash — add to ~/.zshrc or ~/.bashrc if needed
-export PATH="$(go env GOPATH)/bin:$PATH"
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-Check:
-
-```bash
-which pi-bridge
-pi-bridge help
-```
-
-Or with Make:
-
-```bash
-make install
-```
+That builds multi-arch binaries and publishes a GitHub Release.  
+To also update Homebrew, create `cabewaldrop/homebrew-tap` and add a repo secret
+`HOMEBREW_TAP_TOKEN` (classic PAT with `repo` scope).
 
 ## Setup (guided)
 

@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: pi-bridge
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: pi-bridge
+    main: ./cmd/pi-bridge
+    binary: pi-bridge
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+
+# Publishes a Homebrew formula to cabewaldrop/homebrew-tap on release.
+# Requires secret HOMEBREW_TAP_TOKEN (PAT with repo scope on the tap).
+# Until the tap + secret exist, the release job still publishes GitHub binaries.
+brews:
+  - name: pi-bridge
+    repository:
+      owner: cabewaldrop
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/cabewaldrop/pi-bridge
+    description: Discord front-end for the pi coding agent
+    license: MIT
+    install: |
+      bin.install "pi-bridge"
+    test: |
+      assert_match "pi-bridge", shell_output("#{bin}/pi-bridge help")
+    # Skip brew push if token missing (binary release still succeeds).
+    skip_upload: auto
+
+release:
+  github:
+    owner: cabewaldrop
+    name: pi-bridge
+  draft: false
+  prerelease: auto

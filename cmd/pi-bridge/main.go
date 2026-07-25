@@ -19,6 +19,13 @@ import (
 	"github.com/cabewaldrop/pi-bridge/internal/worker"
 )
 
+// Filled by GoReleaser ldflags on release builds.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -53,6 +60,10 @@ func run(log *slog.Logger, args []string) error {
 
 	case "help", "-h", "--help":
 		printHelp()
+		return nil
+
+	case "version", "-v", "--version":
+		fmt.Printf("pi-bridge %s (commit %s, built %s)\n", version, commit, date)
 		return nil
 
 	case "run", "start":
@@ -170,15 +181,17 @@ func runBot(log *slog.Logger, cfg config.Config) error {
 }
 
 func printHelp() {
-	fmt.Print(`pi-bridge — Discord front-end for the pi coding agent
+	fmt.Printf(`pi-bridge — Discord front-end for the pi coding agent (%s)
 
 Usage:
   pi-bridge           Start the bot (launches setup if unconfigured)
   pi-bridge setup     Re-run the guided Discord setup wizard
+  pi-bridge version   Print version
   pi-bridge help      Show this help
 
-Install from this repo:
-  go install ./cmd/pi-bridge
+Install:
+  brew install cabewaldrop/tap/pi-bridge   # after first release + tap setup
+  go install github.com/cabewaldrop/pi-bridge/cmd/pi-bridge@latest
 
 Config is loaded from (first match wins for file discovery):
   $PI_BRIDGE_CONFIG
@@ -186,5 +199,5 @@ Config is loaded from (first match wins for file discovery):
   $XDG_CONFIG_HOME/pi-bridge/config.env   (or ~/Library/Application Support/pi-bridge on macOS)
 
 Environment variables always override the config file.
-`)
+`, version)
 }
