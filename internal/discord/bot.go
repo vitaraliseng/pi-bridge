@@ -12,8 +12,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
 
-	"github.com/cabewaldrop/pi-bridge/internal/pi"
-	"github.com/cabewaldrop/pi-bridge/internal/queue"
+	"github.com/vitaraliseng/pi-bridge/internal/pi"
+	"github.com/vitaraliseng/pi-bridge/internal/queue"
 )
 
 // Config controls bot behavior.

@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/cabewaldrop/pi-bridge/internal/pi"
-	"github.com/cabewaldrop/pi-bridge/internal/queue"
+	"github.com/vitaraliseng/pi-bridge/internal/pi"
+	"github.com/vitaraliseng/pi-bridge/internal/queue"
 )
 
 // Sink receives job progress and final results.

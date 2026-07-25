@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cabewaldrop/pi-bridge/internal/sessionstore"
+	"github.com/vitaraliseng/pi-bridge/internal/sessionstore"
 )
 
 // Pool keeps long-lived pi clients keyed by session (e.g. Discord thread),

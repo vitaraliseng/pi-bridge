@@ -1,4 +1,4 @@
-module github.com/cabewaldrop/pi-bridge
+module github.com/vitaraliseng/pi-bridge
 
 go 1.26.1
 

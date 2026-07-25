@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cabewaldrop/pi-bridge/internal/sessionstore"
+	"github.com/vitaraliseng/pi-bridge/internal/sessionstore"
 )
 
 func TestSessionName(t *testing.T) {

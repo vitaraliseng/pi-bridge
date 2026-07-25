@@ -10,13 +10,13 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/cabewaldrop/pi-bridge/internal/config"
-	"github.com/cabewaldrop/pi-bridge/internal/discord"
-	"github.com/cabewaldrop/pi-bridge/internal/pi"
-	"github.com/cabewaldrop/pi-bridge/internal/queue"
-	"github.com/cabewaldrop/pi-bridge/internal/sessionstore"
-	"github.com/cabewaldrop/pi-bridge/internal/setup"
-	"github.com/cabewaldrop/pi-bridge/internal/worker"
+	"github.com/vitaraliseng/pi-bridge/internal/config"
+	"github.com/vitaraliseng/pi-bridge/internal/discord"
+	"github.com/vitaraliseng/pi-bridge/internal/pi"
+	"github.com/vitaraliseng/pi-bridge/internal/queue"
+	"github.com/vitaraliseng/pi-bridge/internal/sessionstore"
+	"github.com/vitaraliseng/pi-bridge/internal/setup"
+	"github.com/vitaraliseng/pi-bridge/internal/worker"
 )
 
 // Filled by GoReleaser ldflags on release builds.
@@ -190,8 +190,8 @@ Usage:
   pi-bridge help      Show this help
 
 Install:
-  brew install cabewaldrop/tap/pi-bridge   # after first release + tap setup
-  go install github.com/cabewaldrop/pi-bridge/cmd/pi-bridge@latest
+  brew install vitaraliseng/tap/pi-bridge   # after first release + tap setup
+  go install github.com/vitaraliseng/pi-bridge/cmd/pi-bridge@latest
 
 Config is loaded from (first match wins for file discovery):
   $PI_BRIDGE_CONFIG

@@ -23,18 +23,18 @@ Discord mention/DM/thread
 ### Homebrew (after first release)
 
 ```bash
-brew install cabewaldrop/tap/pi-bridge
+brew install vitaraliseng/tap/pi-bridge
 ```
 
 ### Go
 
 ```bash
-go install github.com/cabewaldrop/pi-bridge/cmd/pi-bridge@latest
+go install github.com/vitaraliseng/pi-bridge/cmd/pi-bridge@latest
 ```
 
 ### From a GitHub Release
 
-Binaries for macOS/Linux/Windows are attached to each [release](https://github.com/cabewaldrop/pi-bridge/releases).
+Binaries for macOS/Linux/Windows are attached to each [release](https://github.com/vitaraliseng/pi-bridge/releases).
 
 ### From this repo
 
@@ -56,7 +56,7 @@ git push origin v0.1.0
 ```
 
 That builds multi-arch binaries and publishes a GitHub Release.  
-To also update Homebrew, create `cabewaldrop/homebrew-tap` and add a repo secret
+To also update Homebrew, create `vitaraliseng/homebrew-tap` and add a repo secret
 `HOMEBREW_TAP_TOKEN` (classic PAT with `repo` scope).
 
 ## Setup (guided)

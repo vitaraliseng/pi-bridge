@@ -57,17 +57,17 @@ changelog:
       - Merge pull request
       - Merge branch
 
-# Publishes a Homebrew formula to cabewaldrop/homebrew-tap on release.
+# Publishes a Homebrew formula to vitaraliseng/homebrew-tap on release.
 # Requires secret HOMEBREW_TAP_TOKEN (PAT with repo scope on the tap).
 # Until the tap + secret exist, the release job still publishes GitHub binaries.
 brews:
   - name: pi-bridge
     repository:
-      owner: cabewaldrop
+      owner: vitaraliseng
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: https://github.com/cabewaldrop/pi-bridge
+    homepage: https://github.com/vitaraliseng/pi-bridge
     description: Discord front-end for the pi coding agent
     license: MIT
     install: |
@@ -79,7 +79,7 @@ brews:
 
 release:
   github:
-    owner: cabewaldrop
+    owner: vitaraliseng
     name: pi-bridge
   draft: false
   prerelease: auto

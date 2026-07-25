@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/cabewaldrop/pi-bridge/internal/config"
+	"github.com/vitaraliseng/pi-bridge/internal/config"
 )
 
 // Discord bot permission bitfield for pi-bridge.
