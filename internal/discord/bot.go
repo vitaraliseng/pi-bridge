@@ -139,6 +139,19 @@ func (b *Bot) OnStart(_ context.Context, job queue.Job) error {
 	return nil
 }
 
+// deliver posts text to a channel without live-edit state (OnStart failure path).
+func (b *Bot) deliver(channelID, text string) {
+	body := strings.TrimSpace(text)
+	if body == "" {
+		body = "_(empty response)_"
+	}
+	for _, chunk := range chunkRunes(body, b.cfg.MaxMessageRunes) {
+		if _, err := b.session.ChannelMessageSend(channelID, chunk); err != nil {
+			b.log.Error("deliver message failed", "channel", channelID, "err", err)
+		}
+	}
+}
+
 // OnProgress records activity / streamed text for the live reply.
 func (b *Bot) OnProgress(_ context.Context, job queue.Job, p pi.Progress) {
 	b.mu.Lock()
@@ -175,37 +188,41 @@ func (b *Bot) OnProgress(_ context.Context, job queue.Job, p pi.Progress) {
 
 // OnComplete writes the final answer and stops streaming edits.
 func (b *Bot) OnComplete(_ context.Context, job queue.Job, text string) error {
-	b.finish(job.ID, text, false)
+	b.finish(job, text, false)
 	return nil
 }
 
 // OnError reports a failure in the Discord channel.
 func (b *Bot) OnError(_ context.Context, job queue.Job, err error) {
-	b.finish(job.ID, fmt.Sprintf("**error:** %v", err), true)
+	b.finish(job, fmt.Sprintf("**error:** %v", err), true)
 }
 
-func (b *Bot) finish(jobID, text string, isErr bool) {
+func (b *Bot) finish(job queue.Job, text string, isErr bool) {
 	b.mu.Lock()
-	lr := b.pending[jobID]
-	delete(b.pending, jobID)
+	lr := b.pending[job.ID]
+	delete(b.pending, job.ID)
 	b.mu.Unlock()
-
-	if lr == nil {
-		return
-	}
-	close(lr.done)
-	lr.flush.Stop()
 
 	body := strings.TrimSpace(text)
 	if body == "" && !isErr {
 		body = "_(empty response)_"
 	}
+
+	// OnStart failed or never ran — still deliver the final answer.
+	if lr == nil {
+		b.deliver(job.ChannelID, body)
+		return
+	}
+	close(lr.done)
+	lr.flush.Stop()
+
 	// Final message is the answer only (progress was ephemeral).
 	chunks := chunkRunes(body, b.cfg.MaxMessageRunes)
 	if len(chunks) == 0 {
 		return
 	}
 	if _, err := b.session.ChannelMessageEdit(lr.channelID, lr.messageID, chunks[0]); err != nil {
+		b.log.Warn("edit final message failed; sending new", "err", err)
 		_, _ = b.session.ChannelMessageSend(lr.channelID, chunks[0])
 	}
 	for i := 1; i < len(chunks); i++ {
@@ -307,7 +324,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	// DMs have no guild id — use that first (channel state can lag on first DM).
+	// DMs have no guild id — prefer that signal (channel state can lag on first DM).
 	isDM := m.GuildID == ""
 	isThread := false
 	if !isDM {
@@ -319,14 +336,19 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 				return
 			}
 		}
-		isThread = ch.Type == discordgo.ChannelTypeGuildPublicThread ||
-			ch.Type == discordgo.ChannelTypeGuildPrivateThread ||
-			ch.Type == discordgo.ChannelTypeGuildNewsThread
+		isThread = ch.IsThread()
+	} else {
+		// If we can resolve the channel and it is somehow a thread, treat it as one.
+		if ch, err := s.State.Channel(m.ChannelID); err == nil && ch.IsThread() {
+			isThread = true
+			isDM = false
+		}
 	}
 
 	mentioned := userMentioned(m, s.State.User.ID)
 
 	// Top-level guild channel: open a thread (mention required when configured).
+	// Discord does not support message threads in bot DMs (API returns Unknown Guild).
 	if !isDM && !isThread {
 		if b.cfg.RequireMention && !mentioned {
 			return
@@ -337,16 +359,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if content == "" {
 			content = "Hello!"
 		}
-		thread, err := s.MessageThreadStartComplex(m.ChannelID, m.ID, &discordgo.ThreadStart{
-			Name:                threadName(content, m.Author.Username),
-			AutoArchiveDuration: 60,
-		})
-		if err != nil {
-			b.log.Error("create thread failed", "err", err)
-			_, _ = s.ChannelMessageSend(m.ChannelID, "Could not start a thread for this chat.")
-			return
-		}
-		b.enqueue(thread.ID, m, content)
+		b.startGuildThread(s, m, content)
 		return
 	}
 
@@ -361,6 +374,20 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		b.log.Info("dm accepted", "user", m.Author.Username, "id", m.Author.ID)
 	}
 	b.enqueue(m.ChannelID, m, content)
+}
+
+// startGuildThread starts a Discord thread on the user message and runs the job there.
+func (b *Bot) startGuildThread(s *discordgo.Session, m *discordgo.MessageCreate, content string) {
+	thread, err := s.MessageThreadStartComplex(m.ChannelID, m.ID, &discordgo.ThreadStart{
+		Name:                threadName(content, m.Author.Username),
+		AutoArchiveDuration: 60,
+	})
+	if err != nil {
+		b.log.Error("create thread failed", "err", err)
+		_, _ = s.ChannelMessageSend(m.ChannelID, "Could not start a thread for this chat.")
+		return
+	}
+	b.enqueue(thread.ID, m, content)
 }
 
 func (b *Bot) enqueue(channelID string, m *discordgo.MessageCreate, prompt string) {

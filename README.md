@@ -202,7 +202,8 @@ Note: launchd on a laptop still stops when the machine is off/asleep. For true 2
 1. In a guild channel: `@Bot review this function`  
    → bot opens a thread and replies there
 2. Continue chatting in that thread (no mention required)
-3. DM the bot directly for a private session
+3. DM the bot (allowed users only) — replies **in the DM** (Discord does not allow bots to open threads in DMs)
+4. Follow-ups in a server thread keep that thread’s pi session; DM follow-ups share one session per DM channel
 
 Each Discord channel/thread maps to one pi session (`SessionKey = discord:<channelID>`). Live processes are reaped after 30 minutes idle; the session file remains for resume.
 

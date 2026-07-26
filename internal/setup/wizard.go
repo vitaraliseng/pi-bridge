@@ -266,9 +266,9 @@ func Run(opts Options) (Result, error) {
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "How to chat:")
-	fmt.Fprintln(out, "  • DM the bot directly (allowed users only — no @mention needed)")
-	fmt.Fprintln(out, "  • Or in a server channel:  @your-bot hello")
-	fmt.Fprintln(out, "    (opens a thread and keeps the conversation there)")
+	fmt.Fprintln(out, "  • DM the bot (allowed users only) — replies in the DM (no threads; Discord limit)")
+	fmt.Fprintln(out, "  • Or in a server channel:  @your-bot hello  (opens a thread)")
+	fmt.Fprintln(out, "  • Follow-ups in a server thread keep that thread's pi session")
 	fmt.Fprintln(out, "  Tip: you must share a server with the bot before Discord allows DMs.")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Re-run setup anytime with:  pi-bridge setup")
