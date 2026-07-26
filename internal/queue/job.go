@@ -9,9 +9,5 @@ type Job struct {
 	CWD        string
 	Prompt     string
 	CreatedAt  time.Time
-
-	// Discord reply routing
-	ChannelID string
-	MessageID string
-	UserID    string
+	ChannelID  string // Discord reply routing
 }

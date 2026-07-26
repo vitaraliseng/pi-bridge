@@ -128,8 +128,18 @@ func runBot(log *slog.Logger, cfg config.Config) error {
 	})
 	defer pool.Close()
 
+	if len(cfg.AllowedUserIDs) == 0 {
+		log.Warn("discord.allowed_user_ids is empty — bot will ignore all messages (fail closed). Run: pi-bridge setup")
+	} else {
+		log.Info("user allowlist enabled", "users", len(cfg.AllowedUserIDs))
+	}
+	if len(cfg.AllowedGuildIDs) > 0 {
+		log.Info("guild allowlist enabled", "guilds", len(cfg.AllowedGuildIDs))
+	}
+
 	bot, err := discord.New(discord.Config{
 		Token:           cfg.DiscordToken,
+		AllowedUserIDs:  cfg.AllowedUserIDs,
 		AllowedGuildIDs: cfg.AllowedGuildIDs,
 		RequireMention:  cfg.RequireMention,
 		DefaultCWD:      cfg.DefaultCWD,
@@ -193,10 +203,11 @@ Install:
   brew install vitaraliseng/tap/pi-bridge   # after first release + tap setup
   go install github.com/vitaraliseng/pi-bridge/cmd/pi-bridge@latest
 
-Config is loaded from (first match wins for file discovery):
+Config is YAML (lists for user/guild IDs). Discovery order:
   $PI_BRIDGE_CONFIG
-  ./pi-bridge.env
-  $XDG_CONFIG_HOME/pi-bridge/config.env   (or ~/Library/Application Support/pi-bridge on macOS)
+  ./pi-bridge.yaml
+  $XDG_CONFIG_HOME/pi-bridge/config.yaml  (or ~/Library/Application Support/pi-bridge on macOS)
+  legacy: ./pi-bridge.env or config.env (still read; setup rewrites to .yaml)
 
 Environment variables always override the config file.
 `, version)

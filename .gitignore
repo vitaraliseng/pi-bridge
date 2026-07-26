@@ -7,6 +7,8 @@
 
 # Local secrets / runtime config (never commit)
 pi-bridge.env
+pi-bridge.yaml
+pi-bridge.yml
 .env
 .env.*
 *.pem

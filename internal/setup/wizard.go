@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,7 +94,7 @@ func Run(opts Options) (Result, error) {
 	}
 
 	// --- Step 1: Application ---
-	step(out, 1, 4, "Create a Discord application")
+	step(out, 1, 5, "Create a Discord application")
 	fmt.Fprintln(out, "  I'll open the Discord Developer Portal.")
 	fmt.Fprintln(out, "  Click \"New Application\", name it (e.g. pi-bridge), then Create.")
 	fmt.Fprintln(out)
@@ -105,7 +107,7 @@ func Run(opts Options) (Result, error) {
 	fmt.Fprintln(out)
 
 	// --- Step 2: Bot + intents ---
-	step(out, 2, 4, "Create the bot and enable intents")
+	step(out, 2, 5, "Create the bot and enable intents")
 	botURL := fmt.Sprintf("https://discord.com/developers/applications/%s/bot", appID)
 	fmt.Fprintln(out, "  Opening your app's Bot page…")
 	openOrPrint(out, opts.OpenURL, botURL)
@@ -140,10 +142,18 @@ func Run(opts Options) (Result, error) {
 		fmt.Fprintf(out, "ok (logged in as %s)\n", username)
 		break
 	}
+	ownerID, ownerName := fetchAppOwner(opts.HTTPClient, token)
+	if ownerID != "" {
+		if ownerName != "" {
+			fmt.Fprintf(out, "  App owner: %s (%s)\n", ownerName, ownerID)
+		} else {
+			fmt.Fprintf(out, "  App owner id: %s\n", ownerID)
+		}
+	}
 	fmt.Fprintln(out)
 
 	// --- Step 3: Invite ---
-	step(out, 3, 4, "Invite the bot to your server")
+	step(out, 3, 5, "Invite the bot to your server")
 	fmt.Fprintln(out, "  The bot needs at least one Discord server to live in.")
 	fmt.Fprintln(out, "  A private server just for you is free and fine.")
 	fmt.Fprintln(out)
@@ -176,26 +186,54 @@ func Run(opts Options) (Result, error) {
 	pause(in, out, "Press Enter once the bot is in your server…")
 	fmt.Fprintln(out)
 
-	// --- Step 4: Preferences ---
-	step(out, 4, 4, "Optional preferences")
+	// --- Step 4: Who may use the bot (required) ---
+	step(out, 4, 5, "Who is allowed to use the bot")
+	fmt.Fprintln(out, "  pi-bridge runs a coding agent on THIS machine with your files and tools.")
+	fmt.Fprintln(out, "  Only listed Discord user IDs can talk to it (DMs and servers).")
+	fmt.Fprintln(out, "  Empty allowlist = nobody (fail closed).")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "  How to copy a user ID:")
+	fmt.Fprintln(out, "    1. Discord → User Settings → Advanced → enable Developer Mode")
+	fmt.Fprintln(out, "    2. Right-click your avatar → Copy User ID")
+	fmt.Fprintln(out)
+
+	defaultUsers := ownerID
+	if defaultUsers == "" {
+		defaultUsers = ""
+	}
+	var allowedUsers map[string]struct{}
+	for {
+		label := "Allowed user ID(s), comma-separated"
+		var raw string
+		if defaultUsers != "" {
+			raw = promptDefault(in, out, label, defaultUsers)
+		} else {
+			raw = promptRequired(in, out, label)
+		}
+		allowedUsers = parseIDList(raw)
+		if len(allowedUsers) > 0 {
+			break
+		}
+		fmt.Fprintln(out, "  At least one user ID is required.")
+		defaultUsers = ""
+	}
+	fmt.Fprintln(out)
+
+	// --- Step 5: Preferences ---
+	step(out, 5, 5, "Optional preferences")
 	cfg := config.Config{
 		DiscordToken:         token,
 		DiscordApplicationID: appID,
+		AllowedUserIDs:       allowedUsers,
 		RequireMention:       true,
 		DefaultCWD:           mustGetwd(),
 	}
 
-	if confirm(in, out, "Restrict the bot to specific server ID(s)?", false) {
-		raw := prompt(in, out, "Server ID(s), comma-separated (right-click server → Copy Server ID)")
-		if raw != "" {
-			cfg.AllowedGuildIDs = make(map[string]struct{})
-			for _, id := range strings.Split(raw, ",") {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					cfg.AllowedGuildIDs[id] = struct{}{}
-				}
-			}
-		}
+	fmt.Fprintln(out, `  A Discord "server" is also called a guild.`)
+	fmt.Fprintln(out, "  Restricting guilds is optional; user allowlist already blocks strangers.")
+	if confirm(in, out, "Also restrict to specific server (guild) ID(s)?", false) {
+		raw := prompt(in, out, "Server/guild ID(s), comma-separated (right-click server icon → Copy Server ID)")
+		cfg.AllowedGuildIDs = parseIDList(raw)
 	}
 
 	cwd := promptDefault(in, out, "Working directory for pi tools (PI_CWD)", cfg.DefaultCWD)
@@ -207,25 +245,31 @@ func Run(opts Options) (Result, error) {
 
 	// --- Save ---
 	path := opts.ConfigPath
-	fmt.Fprintf(out, "Saving config to %s (mode 600)…\n", path)
+	// Always write YAML (Save rewrites legacy .env paths to .yaml).
+	if !strings.HasSuffix(strings.ToLower(path), ".yaml") && !strings.HasSuffix(strings.ToLower(path), ".yml") {
+		path = strings.TrimSuffix(path, filepath.Ext(path)) + ".yaml"
+	}
+	fmt.Fprintf(out, "Saving YAML config to %s (mode 600)…\n", path)
 	if err := config.Save(path, cfg); err != nil {
 		return Result{}, err
 	}
-	// Ensure subsequent Load() sees the file we just wrote.
+	cfg.ConfigPath = path
+	// Point Load() at the YAML we just wrote (env still overrides if set).
 	_ = os.Setenv("PI_BRIDGE_CONFIG", path)
-	_ = os.Setenv("DISCORD_TOKEN", cfg.DiscordToken)
-	_ = os.Setenv("DISCORD_APPLICATION_ID", cfg.DiscordApplicationID)
-	if cfg.DefaultCWD != "" {
-		_ = os.Setenv("PI_CWD", cfg.DefaultCWD)
-	}
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "✓ Setup complete!")
 	fmt.Fprintln(out)
+	fmt.Fprintf(out, "Allowed users: %s\n", joinIDs(cfg.AllowedUserIDs))
+	if len(cfg.AllowedGuildIDs) > 0 {
+		fmt.Fprintf(out, "Allowed servers (guilds): %s\n", joinIDs(cfg.AllowedGuildIDs))
+	}
+	fmt.Fprintln(out)
 	fmt.Fprintln(out, "How to chat:")
-	fmt.Fprintln(out, "  • In a server channel:  @your-bot hello")
+	fmt.Fprintln(out, "  • DM the bot directly (allowed users only — no @mention needed)")
+	fmt.Fprintln(out, "  • Or in a server channel:  @your-bot hello")
 	fmt.Fprintln(out, "    (opens a thread and keeps the conversation there)")
-	fmt.Fprintln(out, "  • Or DM the bot directly")
+	fmt.Fprintln(out, "  Tip: you must share a server with the bot before Discord allows DMs.")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Re-run setup anytime with:  pi-bridge setup")
 	fmt.Fprintln(out)
@@ -311,15 +355,19 @@ func promptSecret(in *bufio.Reader, out io.Writer, label string, hide bool) (str
 	return strings.TrimSpace(line), nil
 }
 
-// loadExisting returns a config if the target file or environment already has a token.
+// loadExisting returns a config if a known config file or environment already has a token.
 func loadExisting(targetPath string) (config.Config, bool) {
-	// Isolate from ambient env when a dedicated path was requested and does not exist yet.
-	if st, err := os.Stat(targetPath); err == nil && !st.IsDir() {
-		_ = os.Setenv("PI_BRIDGE_CONFIG", targetPath)
+	candidates := existingConfigCandidates(targetPath)
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err != nil || st.IsDir() {
+			continue
+		}
+		_ = os.Setenv("PI_BRIDGE_CONFIG", p)
 		if cfg, err := config.Load(); err == nil && cfg.DiscordToken != "" {
 			return cfg, true
 		}
 	}
+
 	// Env-only configuration (no file yet).
 	if tok := strings.TrimSpace(os.Getenv("DISCORD_TOKEN")); tok != "" {
 		cfg, err := config.Load()
@@ -329,6 +377,42 @@ func loadExisting(targetPath string) (config.Config, bool) {
 		return config.Config{DiscordToken: tok, ConfigPath: targetPath}, true
 	}
 	return config.Config{}, false
+}
+
+func existingConfigCandidates(targetPath string) []string {
+	var out []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		for _, e := range out {
+			if e == p {
+				return
+			}
+		}
+		out = append(out, p)
+	}
+
+	add(targetPath)
+	if targetPath != "" {
+		base := strings.TrimSuffix(targetPath, filepath.Ext(targetPath))
+		add(base + ".yaml")
+		add(base + ".yml")
+		add(base + ".env")
+	}
+
+	// When using the default location, also probe other historical defaults.
+	if targetPath == config.DefaultConfigPath() {
+		if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+			add(filepath.Join(dir, "pi-bridge", "config.env"))
+			add(filepath.Join(dir, "pi-bridge", "config.yml"))
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			add(filepath.Join(home, ".pi-bridge.yaml"))
+			add(filepath.Join(home, ".pi-bridge.env"))
+		}
+	}
+	return out
 }
 
 func pause(in *bufio.Reader, out io.Writer, msg string) {
@@ -370,6 +454,68 @@ func validateToken(client *http.Client, token string) (string, error) {
 		me.Username = me.ID
 	}
 	return me.Username, nil
+}
+
+// fetchAppOwner best-effort reads the Discord application owner for allowlist defaults.
+func fetchAppOwner(client *http.Client, token string) (id, username string) {
+	if client == nil || token == "" {
+		return "", ""
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://discord.com/api/v10/oauth2/applications/@me", nil)
+	if err != nil {
+		return "", ""
+	}
+	req.Header.Set("Authorization", "Bot "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var app struct {
+		Owner struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+		} `json:"owner"`
+		// Team-owned apps expose owner under team; ignore for now.
+	}
+	if err := json.Unmarshal(body, &app); err != nil {
+		return "", ""
+	}
+	return app.Owner.ID, app.Owner.Username
+}
+
+func parseIDList(raw string) map[string]struct{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := make(map[string]struct{})
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func joinIDs(ids map[string]struct{}) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }
 
 func openOrPrint(out io.Writer, open func(string) error, rawURL string) {

@@ -52,10 +52,15 @@ func TestValidateTokenOK(t *testing.T) {
 func TestRunWizardHappyPath(t *testing.T) {
 	t.Setenv("DISCORD_TOKEN", "")
 	t.Setenv("DISCORD_APPLICATION_ID", "")
+	t.Setenv("ALLOWED_USER_IDS", "")
 	t.Setenv("PI_BRIDGE_CONFIG", "")
 
-	// Mock Discord @me
+	// Mock Discord users/@me + oauth2/applications/@me
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "oauth2/applications") {
+			_, _ = w.Write([]byte(`{"owner":{"id":"111222333","username":"cabe"}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"username":"testbot","id":"99"}`))
 	}))
 	defer srv.Close()
@@ -63,7 +68,6 @@ func TestRunWizardHappyPath(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		req.URL.Scheme = "http"
 		req.URL.Host = strings.TrimPrefix(srv.URL, "http://")
-		req.URL.Path = "/users/@me"
 		return http.DefaultTransport.RoundTrip(req)
 	})}
 
@@ -74,6 +78,7 @@ func TestRunWizardHappyPath(t *testing.T) {
 		"fake-token", // token (non-secret path via pipe)
 		"y",          // already have a server
 		"",           // pause after auto-opened invite
+		"",           // accept default allowed user (owner)
 		"n",          // no guild restrict
 		"",           // default cwd
 		"y",          // require mention
@@ -82,7 +87,7 @@ func TestRunWizardHappyPath(t *testing.T) {
 	}, "\n")
 
 	dir := t.TempDir()
-	path := dir + "/config.env"
+	path := dir + "/config.yaml"
 
 	var out strings.Builder
 	res, err := Run(Options{
@@ -100,6 +105,9 @@ func TestRunWizardHappyPath(t *testing.T) {
 	}
 	if res.Config.DiscordApplicationID != "999888777" {
 		t.Fatalf("app id = %q", res.Config.DiscordApplicationID)
+	}
+	if _, ok := res.Config.AllowedUserIDs["111222333"]; !ok {
+		t.Fatalf("expected owner user id in allowlist, got %#v", res.Config.AllowedUserIDs)
 	}
 	if res.StartNow {
 		t.Fatal("expected StartNow=false")

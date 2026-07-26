@@ -10,10 +10,12 @@ import (
 var ErrClosed = errors.New("queue closed")
 
 // Memory is a simple bounded in-memory job queue backed by a channel.
+// Close signals via done and never closes ch, so Enqueue cannot panic on send.
 type Memory struct {
 	ch     chan Job
+	done   chan struct{}
 	closed bool
-	mu     sync.RWMutex
+	mu     sync.Mutex
 }
 
 // NewMemory creates a queue with the given capacity.
@@ -21,20 +23,34 @@ func NewMemory(capacity int) *Memory {
 	if capacity < 1 {
 		capacity = 64
 	}
-	return &Memory{ch: make(chan Job, capacity)}
+	return &Memory{
+		ch:   make(chan Job, capacity),
+		done: make(chan struct{}),
+	}
 }
 
-// Enqueue adds a job. Blocks if the queue is full until ctx is done.
+// Enqueue adds a job. Blocks if the queue is full until ctx is done or Close.
 func (q *Memory) Enqueue(ctx context.Context, job Job) error {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+	// Fast path: reject or non-blocking send under lock so Close can't race a send.
+	q.mu.Lock()
 	if q.closed {
+		q.mu.Unlock()
 		return ErrClosed
 	}
+	select {
+	case q.ch <- job:
+		q.mu.Unlock()
+		return nil
+	default:
+		q.mu.Unlock()
+	}
 
+	// Full: wait without holding mu (Close must not deadlock).
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-q.done:
+		return ErrClosed
 	case q.ch <- job:
 		return nil
 	}
@@ -42,14 +58,21 @@ func (q *Memory) Enqueue(ctx context.Context, job Job) error {
 
 // Claim waits for the next job.
 func (q *Memory) Claim(ctx context.Context) (Job, error) {
-	select {
-	case <-ctx.Done():
-		return Job{}, ctx.Err()
-	case job, ok := <-q.ch:
-		if !ok {
-			return Job{}, ErrClosed
+	for {
+		select {
+		case <-ctx.Done():
+			return Job{}, ctx.Err()
+		case job := <-q.ch:
+			return job, nil
+		case <-q.done:
+			// Drain any jobs still buffered, then stop.
+			select {
+			case job := <-q.ch:
+				return job, nil
+			default:
+				return Job{}, ErrClosed
+			}
 		}
-		return job, nil
 	}
 }
 
@@ -61,5 +84,5 @@ func (q *Memory) Close() {
 		return
 	}
 	q.closed = true
-	close(q.ch)
+	close(q.done)
 }

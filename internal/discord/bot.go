@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/google/uuid"
 
 	"github.com/vitaraliseng/pi-bridge/internal/pi"
 	"github.com/vitaraliseng/pi-bridge/internal/queue"
@@ -19,10 +18,14 @@ import (
 // Config controls bot behavior.
 type Config struct {
 	Token string
-	// AllowedGuildIDs restricts the bot to these servers. Empty = all.
+	// AllowedUserIDs is the set of Discord user snowflakes permitted to use the bot.
+	// Empty means nobody is allowed (fail closed) — configure via setup / ALLOWED_USER_IDS.
+	AllowedUserIDs map[string]struct{}
+	// AllowedGuildIDs restricts the bot to these Discord servers (guilds). Empty = any server.
+	// User allowlist still applies inside allowed guilds.
 	AllowedGuildIDs map[string]struct{}
 	// RequireMention requires an @bot mention in top-level guild channels.
-	// DMs always work. Existing bot threads always work.
+	// DMs and existing threads still require an allowed user ID.
 	RequireMention bool
 	// DefaultCWD is passed to pi as the working directory.
 	DefaultCWD string
@@ -40,6 +43,8 @@ type Bot struct {
 	// Live message editing while streaming
 	mu      sync.Mutex
 	pending map[string]*liveReply // jobID -> live reply state
+
+	emptyAllowlistOnce sync.Once
 }
 
 type liveReply struct {
@@ -280,6 +285,17 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author == nil || m.Author.Bot {
 		return
 	}
+	// Fail closed: without an allowlist, ignore everyone.
+	if len(b.cfg.AllowedUserIDs) == 0 {
+		b.emptyAllowlistOnce.Do(func() {
+			b.log.Warn("discord.allowed_user_ids is empty (fail closed); re-run pi-bridge setup")
+		})
+		return
+	}
+	if _, ok := b.cfg.AllowedUserIDs[m.Author.ID]; !ok {
+		b.log.Info("ignored unauthorized user", "user", m.Author.Username, "id", m.Author.ID)
+		return
+	}
 	if m.GuildID != "" && len(b.cfg.AllowedGuildIDs) > 0 {
 		if _, ok := b.cfg.AllowedGuildIDs[m.GuildID]; !ok {
 			return
@@ -291,30 +307,33 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	ch, err := s.State.Channel(m.ChannelID)
-	if err != nil {
-		ch, err = s.Channel(m.ChannelID)
+	// DMs have no guild id — use that first (channel state can lag on first DM).
+	isDM := m.GuildID == ""
+	isThread := false
+	if !isDM {
+		ch, err := s.State.Channel(m.ChannelID)
 		if err != nil {
-			b.log.Warn("resolve channel failed", "err", err)
-			return
+			ch, err = s.Channel(m.ChannelID)
+			if err != nil {
+				b.log.Warn("resolve channel failed", "err", err)
+				return
+			}
 		}
+		isThread = ch.Type == discordgo.ChannelTypeGuildPublicThread ||
+			ch.Type == discordgo.ChannelTypeGuildPrivateThread ||
+			ch.Type == discordgo.ChannelTypeGuildNewsThread
 	}
-	isThread := ch.Type == discordgo.ChannelTypeGuildPublicThread ||
-		ch.Type == discordgo.ChannelTypeGuildPrivateThread ||
-		ch.Type == discordgo.ChannelTypeGuildNewsThread
-	isDM := ch.Type == discordgo.ChannelTypeDM || ch.Type == discordgo.ChannelTypeGroupDM
 
 	mentioned := userMentioned(m, s.State.User.ID)
 
-	// Top-level guild channel: require mention and open a thread.
+	// Top-level guild channel: open a thread (mention required when configured).
 	if !isDM && !isThread {
 		if b.cfg.RequireMention && !mentioned {
 			return
 		}
-		if !mentioned {
-			return
+		if mentioned {
+			content = stripMentions(content, s.State.User.ID)
 		}
-		content = stripMentions(content, s.State.User.ID)
 		if content == "" {
 			content = "Hello!"
 		}
@@ -331,26 +350,27 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	// DMs and existing threads: respond in-place.
+	// DMs and existing threads: respond in-place (no @mention required).
 	if mentioned {
 		content = stripMentions(content, s.State.User.ID)
 	}
 	if content == "" {
 		return
 	}
+	if isDM {
+		b.log.Info("dm accepted", "user", m.Author.Username, "id", m.Author.ID)
+	}
 	b.enqueue(m.ChannelID, m, content)
 }
 
 func (b *Bot) enqueue(channelID string, m *discordgo.MessageCreate, prompt string) {
 	job := queue.Job{
-		ID:         uuid.NewString(),
+		ID:         m.ID,
 		SessionKey: "discord:" + channelID,
 		CWD:        b.cfg.DefaultCWD,
 		Prompt:     prompt,
 		CreatedAt:  time.Now(),
 		ChannelID:  channelID,
-		MessageID:  m.ID,
-		UserID:     m.Author.ID,
 	}
 	if err := b.queue.Enqueue(context.Background(), job); err != nil {
 		b.log.Error("enqueue failed", "err", err)

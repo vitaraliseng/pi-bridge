@@ -87,15 +87,46 @@ If no token is configured, an interactive wizard walks you through Discord setup
 2. Open the Bot page after you paste the Application ID
 3. Prompt for the token (hidden input) and validate it
 4. Help create a server if needed, then open the invite link
-5. Save config to your user config dir (mode `600`)
-6. Optionally start the bot immediately
+5. Configure **allowed user IDs** (required; empty = nobody can use the bot)
+6. Optional: restrict to specific Discord servers (guilds)
+7. Save **YAML** config to your user config dir (mode `600`)
+8. Optionally start the bot immediately
 
-Config is stored at (first existing file wins on load):
+### Config file (YAML)
+
+Preferred path (first existing wins):
 
 - `$PI_BRIDGE_CONFIG`
-- `./pi-bridge.env`
-- macOS: `~/Library/Application Support/pi-bridge/config.env`
-- Linux: `~/.config/pi-bridge/config.env`
+- `./pi-bridge.yaml`
+- macOS: `~/Library/Application Support/pi-bridge/config.yaml`
+- Linux: `~/.config/pi-bridge/config.yaml`
+- Legacy dotenv (`pi-bridge.env` / `config.env`) is still **read**; `pi-bridge setup` rewrites to `.yaml`
+
+Example:
+
+```yaml
+discord:
+  token: "YOUR_BOT_TOKEN"
+  application_id: "YOUR_APP_ID"
+  # Who may use the bot (DMs + servers). Empty = nobody (fail closed).
+  allowed_user_ids:
+    - "123456789012345678"
+  # Optional: only these Discord servers ("guild" = server).
+  allowed_guild_ids: []
+  require_mention: true
+
+pi:
+  cwd: "/Users/you/dev/my-project"
+  binary: pi
+  args: []
+  persist_sessions: true
+  # session_dir / session_index default under the user config dir
+
+bridge:
+  workers: 1
+  queue_size: 64
+  job_timeout: 10m
+```
 
 ## Run
 
@@ -103,24 +134,25 @@ Config is stored at (first existing file wins on load):
 pi-bridge
 ```
 
-Optional env vars (override the config file):
+Environment variables still **override** the YAML file (useful for secrets in launchd/CI):
 
-| Variable | Default | Meaning |
+| Variable | YAML field | Meaning |
 |---|---|---|
-| `DISCORD_TOKEN` | _(required)_ | Bot token |
-| `DISCORD_APPLICATION_ID` | | Application ID (from setup) |
-| `ALLOWED_GUILD_IDS` | all | Comma-separated server IDs |
-| `REQUIRE_MENTION` | `true` | Guild messages must @mention the bot |
-| `PI_CWD` | process cwd | Working directory for pi tools |
-| `PI_BINARY` | `pi` | Path to pi executable |
-| `PI_ARGS` | _(none)_ | Extra args after `--mode rpc` |
-| `PI_PERSIST_SESSIONS` | `true` | Resume pi sessions across restarts |
-| `PI_SESSION_DIR` | user config `…/pi-bridge/sessions` | Where pi JSONL sessions are stored |
-| `PI_SESSION_INDEX` | user config `…/session-index.json` | Discord thread → session file map |
-| `WORKERS` | `1` | Concurrent job workers |
-| `QUEUE_SIZE` | `64` | In-memory queue capacity |
-| `JOB_TIMEOUT` | `10m` | Per-job timeout |
-| `PI_BRIDGE_CONFIG` | auto | Path to dotenv config file |
+| `DISCORD_TOKEN` | `discord.token` | Bot token |
+| `DISCORD_APPLICATION_ID` | `discord.application_id` | Application ID |
+| `ALLOWED_USER_IDS` | `discord.allowed_user_ids` | Comma-separated override of the YAML list |
+| `ALLOWED_GUILD_IDS` | `discord.allowed_guild_ids` | Comma-separated server IDs |
+| `REQUIRE_MENTION` | `discord.require_mention` | Server messages must @mention the bot |
+| `PI_CWD` | `pi.cwd` | Working directory for pi tools |
+| `PI_BINARY` | `pi.binary` | Path to pi executable |
+| `PI_ARGS` | `pi.args` | Extra args after `--mode rpc` (space-separated) |
+| `PI_PERSIST_SESSIONS` | `pi.persist_sessions` | Resume pi sessions across restarts |
+| `PI_SESSION_DIR` | `pi.session_dir` | Where pi JSONL sessions are stored |
+| `PI_SESSION_INDEX` | `pi.session_index` | Discord thread → session file map |
+| `WORKERS` | `bridge.workers` | Concurrent job workers |
+| `QUEUE_SIZE` | `bridge.queue_size` | In-memory queue capacity |
+| `JOB_TIMEOUT` | `bridge.job_timeout` | Per-job timeout |
+| `PI_BRIDGE_CONFIG` | — | Path to YAML (or legacy dotenv) config file |
 
 ### Session memory
 
