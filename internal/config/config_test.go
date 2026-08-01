@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,5 +147,84 @@ func TestSaveConvertsLegacyPathToYAML(t *testing.T) {
 	yamlPath := filepath.Join(dir, "config.yaml")
 	if _, err := os.Stat(yamlPath); err != nil {
 		t.Fatalf("expected yaml write at %s: %v", yamlPath, err)
+	}
+}
+
+func TestDirPrefersXDGConfigHome(t *testing.T) {
+	root := t.TempDir()
+	xdg := filepath.Join(root, "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	want := filepath.Join(xdg, "pi-bridge")
+	if got := Dir(); got != want {
+		t.Fatalf("Dir() = %q, want %q", got, want)
+	}
+	if got := DefaultHomeDir(); got != filepath.Join(want, "home") {
+		t.Fatalf("DefaultHomeDir() = %q", got)
+	}
+	if got := DefaultConfigPath(); got != filepath.Join(want, "config.yaml") {
+		t.Fatalf("DefaultConfigPath() = %q", got)
+	}
+}
+
+func TestDefaultsUseAssistantHome(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", root)
+	cfg := defaults()
+	home := filepath.Join(root, "pi-bridge", "home")
+	work := filepath.Join(root, "pi-bridge", "work")
+	if cfg.Home != home || cfg.DefaultCWD != home {
+		t.Fatalf("home/cwd = %q / %q, want %q", cfg.Home, cfg.DefaultCWD, home)
+	}
+	if cfg.WorkRoot != work {
+		t.Fatalf("work_root = %q, want %q", cfg.WorkRoot, work)
+	}
+}
+
+func TestEnsureWorkRoot(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "work")
+	if err := EnsureWorkRoot(work); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(filepath.Join(work, ".sandboxes")); err != nil || !st.IsDir() {
+		t.Fatalf("sandboxes missing: %v", err)
+	}
+}
+
+func TestExpandPathTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := expandPath("~/dev"); got != filepath.Join(home, "dev") {
+		t.Fatalf("expandPath = %q", got)
+	}
+}
+
+func TestEnsureHomeSeedsAgents(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := EnsureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	agents := filepath.Join(home, "AGENTS.md")
+	b, err := os.ReadFile(agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "Assistant home") {
+		t.Fatalf("unexpected AGENTS.md: %s", b)
+	}
+	// Second call must not clobber edits.
+	if err := os.WriteFile(agents, []byte("custom\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "custom\n" {
+		t.Fatalf("AGENTS.md overwritten: %q", b)
 	}
 }

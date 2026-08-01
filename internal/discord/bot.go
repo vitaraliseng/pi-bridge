@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -43,6 +44,8 @@ type Bot struct {
 	// Live message editing while streaming
 	mu      sync.Mutex
 	pending map[string]*liveReply // jobID -> live reply state
+	// seen dedupes MESSAGE_CREATE deliveries (reconnect / multi-session races).
+	seen map[string]time.Time
 
 	emptyAllowlistOnce sync.Once
 }
@@ -51,14 +54,12 @@ type liveReply struct {
 	mu        sync.Mutex
 	channelID string
 	messageID string
-	steps     []string // activity log (what the agent is doing)
+	status    string // single current activity line
 	answer    strings.Builder
 	dirty     bool
 	flush     *time.Ticker
 	done      chan struct{}
 }
-
-const maxProgressSteps = 8
 
 // New creates a Discord bot bound to the given queue.
 func New(cfg Config, q *queue.Memory, log *slog.Logger) (*Bot, error) {
@@ -85,6 +86,7 @@ func New(cfg Config, q *queue.Memory, log *slog.Logger) (*Bot, error) {
 		cfg:     cfg,
 		log:     log,
 		pending: make(map[string]*liveReply),
+		seen:    make(map[string]time.Time),
 	}
 	s.AddHandler(b.onReady)
 	s.AddHandler(b.onMessage)
@@ -116,9 +118,12 @@ func (b *Bot) Close() error {
 
 // --- Sink implementation for worker ---
 
-// OnStart posts a placeholder reply message.
+// OnStart posts a status card and starts typing + live edits.
 func (b *Bot) OnStart(_ context.Context, job queue.Job) error {
-	msg, err := b.session.ChannelMessageSend(job.ChannelID, renderProgress([]string{"Starting…"}, "", true))
+	_ = b.session.ChannelTyping(job.ChannelID)
+	msg, err := b.session.ChannelMessageSendComplex(job.ChannelID, &discordgo.MessageSend{
+		Embeds: []*discordgo.MessageEmbed{statusEmbed("Starting…")},
+	})
 	if err != nil {
 		return err
 	}
@@ -126,7 +131,7 @@ func (b *Bot) OnStart(_ context.Context, job queue.Job) error {
 	lr := &liveReply{
 		channelID: job.ChannelID,
 		messageID: msg.ID,
-		steps:     []string{"Starting…"},
+		status:    "Starting…",
 		dirty:     true,
 		flush:     time.NewTicker(900 * time.Millisecond),
 		done:      make(chan struct{}),
@@ -167,22 +172,19 @@ func (b *Bot) OnProgress(_ context.Context, job queue.Job, p pi.Progress) {
 	switch p.Kind {
 	case pi.ProgressDelta:
 		lr.answer.WriteString(p.Delta)
+		if lr.status == "" || lr.status == "Starting…" || lr.status == "Thinking…" {
+			lr.status = "Writing reply…"
+		}
 		lr.dirty = true
-	case pi.ProgressStatus, pi.ProgressToolStart, pi.ProgressToolEnd:
+	case pi.ProgressStatus, pi.ProgressToolStart:
 		msg := strings.TrimSpace(p.Message)
-		if msg == "" {
+		if msg == "" || msg == lr.status {
 			return
 		}
-		// Dedup consecutive identical status lines.
-		if n := len(lr.steps); n > 0 && lr.steps[n-1] == msg {
-			return
-		}
-		lr.steps = append(lr.steps, msg)
-		if len(lr.steps) > maxProgressSteps*2 {
-			// Keep memory bounded; render shows only the last N.
-			lr.steps = lr.steps[len(lr.steps)-maxProgressSteps:]
-		}
+		lr.status = msg
 		lr.dirty = true
+	case pi.ProgressToolEnd:
+		// Keep the start line; avoid flashing "Finished X" as the only status.
 	}
 }
 
@@ -216,12 +218,19 @@ func (b *Bot) finish(job queue.Job, text string, isErr bool) {
 	close(lr.done)
 	lr.flush.Stop()
 
-	// Final message is the answer only (progress was ephemeral).
+	// Final message is the answer only (status embed is cleared).
 	chunks := chunkRunes(body, b.cfg.MaxMessageRunes)
 	if len(chunks) == 0 {
 		return
 	}
-	if _, err := b.session.ChannelMessageEdit(lr.channelID, lr.messageID, chunks[0]); err != nil {
+	emptyEmbeds := []*discordgo.MessageEmbed{}
+	content := chunks[0]
+	if _, err := b.session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+		Channel: lr.channelID,
+		ID:      lr.messageID,
+		Content: &content,
+		Embeds:  &emptyEmbeds,
+	}); err != nil {
 		b.log.Warn("edit final message failed; sending new", "err", err)
 		_, _ = b.session.ChannelMessageSend(lr.channelID, chunks[0])
 	}
@@ -231,65 +240,77 @@ func (b *Bot) finish(job queue.Job, text string, isErr bool) {
 }
 
 func (b *Bot) flushLoop(lr *liveReply) {
+	// Discord typing indicators last ~10s; refresh a bit sooner.
+	const typingEvery = 8 * time.Second
+	lastTyping := time.Now()
+	_ = b.session.ChannelTyping(lr.channelID)
+
 	for {
 		select {
 		case <-lr.done:
 			return
 		case <-lr.flush.C:
+			if time.Since(lastTyping) >= typingEvery {
+				_ = b.session.ChannelTyping(lr.channelID)
+				lastTyping = time.Now()
+			}
+
 			lr.mu.Lock()
 			if !lr.dirty {
 				lr.mu.Unlock()
 				continue
 			}
-			steps := append([]string(nil), lr.steps...)
+			status := lr.status
 			answer := lr.answer.String()
 			lr.dirty = false
 			lr.mu.Unlock()
 
-			preview := renderProgress(steps, answer, true)
-			if utf8.RuneCountInString(preview) > b.cfg.MaxMessageRunes {
-				preview = string([]rune(preview)[:b.cfg.MaxMessageRunes-1]) + "…"
+			content := truncateRunes(answer, b.cfg.MaxMessageRunes)
+			if strings.TrimSpace(answer) != "" {
+				if utf8.RuneCountInString(content) >= b.cfg.MaxMessageRunes {
+					content = string([]rune(content)[:b.cfg.MaxMessageRunes-1]) + "…"
+				} else {
+					content += " ▍"
+				}
 			}
-			_, _ = b.session.ChannelMessageEdit(lr.channelID, lr.messageID, preview)
+			embeds := []*discordgo.MessageEmbed{statusEmbed(status)}
+			_, _ = b.session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+				Channel: lr.channelID,
+				ID:      lr.messageID,
+				Content: &content,
+				Embeds:  &embeds,
+			})
 		}
 	}
 }
 
-// renderProgress builds the live Discord message body.
-func renderProgress(steps []string, answer string, streaming bool) string {
-	var b strings.Builder
+const colorWorking = 0x5865F2 // Discord blurple
 
-	if n := len(steps); n > 0 {
-		b.WriteString("**Progress**\n")
-		start := 0
-		if n > maxProgressSteps {
-			start = n - maxProgressSteps
-			b.WriteString("_…earlier steps omitted_\n")
-		}
-		for _, s := range steps[start:] {
-			b.WriteString("• ")
-			b.WriteString(s)
-			b.WriteByte('\n')
-		}
+// statusEmbed is a single-line thinking indicator (not a checklist).
+func statusEmbed(status string) *discordgo.MessageEmbed {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "Thinking…"
 	}
+	// Keep embed descriptions short; Discord soft-caps are large but chat UI is not.
+	if r := []rune(status); len(r) > 200 {
+		status = string(r[:199]) + "…"
+	}
+	return &discordgo.MessageEmbed{
+		Description: "🔄 " + status,
+		Color:       colorWorking,
+	}
+}
 
-	answer = strings.TrimSpace(answer)
-	if answer != "" {
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(answer)
-		if streaming {
-			b.WriteString(" ▍")
-		}
-		return b.String()
+func truncateRunes(s string, limit int) string {
+	if limit < 1 {
+		return s
 	}
-
-	if b.Len() == 0 {
-		return "_working…_"
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
 	}
-	b.WriteString("\n_working…_")
-	return b.String()
+	return string(runes[:limit])
 }
 
 // --- Discord event handlers ---
@@ -320,7 +341,12 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	content := strings.TrimSpace(m.Content)
-	if content == "" {
+	hasAttachments := len(m.Attachments) > 0
+	if content == "" && !hasAttachments {
+		return
+	}
+	// Drop duplicate gateway deliveries of the same message.
+	if !b.markSeen(m.ID) {
 		return
 	}
 
@@ -357,7 +383,11 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			content = stripMentions(content, s.State.User.ID)
 		}
 		if content == "" {
-			content = "Hello!"
+			if hasAttachments {
+				content = "Please review the attached file(s)."
+			} else {
+				content = "Hello!"
+			}
 		}
 		b.startGuildThread(s, m, content)
 		return
@@ -368,7 +398,10 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		content = stripMentions(content, s.State.User.ID)
 	}
 	if content == "" {
-		return
+		if !hasAttachments {
+			return
+		}
+		content = "Please review the attached file(s)."
 	}
 	if isDM {
 		b.log.Info("dm accepted", "user", m.Author.Username, "id", m.Author.ID)
@@ -378,24 +411,81 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 // startGuildThread starts a Discord thread on the user message and runs the job there.
 func (b *Bot) startGuildThread(s *discordgo.Session, m *discordgo.MessageCreate, content string) {
-	thread, err := s.MessageThreadStartComplex(m.ChannelID, m.ID, &discordgo.ThreadStart{
-		Name:                threadName(content, m.Author.Username),
-		AutoArchiveDuration: 60,
-	})
+	name := threadName(content, m.Author.Username)
+	thread, err := startMessageThread(s, m.ChannelID, m.ID, name)
 	if err != nil {
-		b.log.Error("create thread failed", "err", err)
-		_, _ = s.ChannelMessageSend(m.ChannelID, "Could not start a thread for this chat.")
-		return
+		// Race: another delivery/instance may have created it already.
+		// Message-spawned threads use the source message ID as the thread ID.
+		if existing, e2 := s.Channel(m.ID); e2 == nil && existing != nil && existing.IsThread() {
+			b.log.Info("reusing existing message thread", "thread", existing.ID, "create_err", err)
+			thread = existing
+		} else {
+			b.log.Error("create thread failed", "err", err)
+			_, _ = s.ChannelMessageSend(m.ChannelID, "Could not start a thread for this chat.")
+			return
+		}
 	}
 	b.enqueue(thread.ID, m, content)
 }
 
+// startMessageThread creates a public thread from a message without sending
+// discordgo.ThreadStart's non-omitempty "invitable":false field (invalid for public threads).
+func startMessageThread(s *discordgo.Session, channelID, messageID, name string) (*discordgo.Channel, error) {
+	endpoint := discordgo.EndpointChannelMessageThread(channelID, messageID)
+	body, err := s.RequestWithBucketID("POST", endpoint, map[string]any{
+		"name":                  name,
+		"auto_archive_duration": 60,
+	}, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var ch discordgo.Channel
+	if err := json.Unmarshal(body, &ch); err != nil {
+		return nil, err
+	}
+	return &ch, nil
+}
+
+// markSeen reports whether this message ID should be processed (first sighting).
+func (b *Bot) markSeen(id string) bool {
+	if id == "" {
+		return true
+	}
+	now := time.Now()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.seen[id]; ok {
+		return false
+	}
+	b.seen[id] = now
+	if len(b.seen) > 256 {
+		cutoff := now.Add(-10 * time.Minute)
+		for k, t := range b.seen {
+			if t.Before(cutoff) {
+				delete(b.seen, k)
+			}
+		}
+	}
+	return true
+}
+
 func (b *Bot) enqueue(channelID string, m *discordgo.MessageCreate, prompt string) {
+	prepared, err := prepareAttachments(m.ID, m.Attachments)
+	if err != nil {
+		b.log.Error("prepare attachments failed", "err", err)
+		_, _ = b.session.ChannelMessageSend(channelID, "Could not download attachments; try again.")
+		return
+	}
+	if prepared.PromptExtra != "" {
+		prompt += prepared.PromptExtra
+	}
+
 	job := queue.Job{
 		ID:         m.ID,
 		SessionKey: "discord:" + channelID,
 		CWD:        b.cfg.DefaultCWD,
 		Prompt:     prompt,
+		Images:     prepared.Images,
 		CreatedAt:  time.Now(),
 		ChannelID:  channelID,
 	}
@@ -404,7 +494,13 @@ func (b *Bot) enqueue(channelID string, m *discordgo.MessageCreate, prompt strin
 		_, _ = b.session.ChannelMessageSend(channelID, "Queue is full or shutting down; try again.")
 		return
 	}
-	b.log.Info("enqueued", "job", job.ID, "session", job.SessionKey, "user", m.Author.Username)
+	b.log.Info("enqueued",
+		"job", job.ID,
+		"session", job.SessionKey,
+		"user", m.Author.Username,
+		"attachments", len(m.Attachments),
+		"images", len(job.Images),
+	)
 }
 
 func userMentioned(m *discordgo.MessageCreate, botID string) bool {

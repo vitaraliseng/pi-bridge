@@ -24,11 +24,18 @@ type Config struct {
 	// Empty means any server the bot is in (user allowlist still applies).
 	AllowedGuildIDs map[string]struct{}
 	RequireMention  bool
-	DefaultCWD      string
-	QueueSize       int
-	Workers         int
-	JobTimeout      time.Duration
-	PiBinary        string
+	// Home is the assistant workspace (identity, memory, default tools cwd).
+	// Default: $XDG_CONFIG_HOME/pi-bridge/home (or ~/.config/pi-bridge/home).
+	Home string
+	// WorkRoot is where the agent clones and keeps code checkouts.
+	// Default: $XDG_CONFIG_HOME/pi-bridge/work (hidden product data).
+	WorkRoot string
+	// DefaultCWD is the working directory passed to pi. Defaults to Home.
+	DefaultCWD string
+	QueueSize  int
+	Workers    int
+	JobTimeout time.Duration
+	PiBinary   string
 	// Extra args after --mode rpc.
 	PiArgs []string
 
@@ -59,6 +66,8 @@ type fileDiscord struct {
 }
 
 type filePi struct {
+	Home            string   `yaml:"home"`
+	WorkRoot        string   `yaml:"work_root"`
 	CWD             string   `yaml:"cwd"`
 	Binary          string   `yaml:"binary"`
 	Args            []string `yaml:"args"`
@@ -88,6 +97,7 @@ func Load() (Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	normalizePaths(&cfg)
 
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
@@ -96,7 +106,7 @@ func Load() (Config, error) {
 		cfg.QueueSize = 64
 	}
 	if cfg.JobTimeout <= 0 {
-		cfg.JobTimeout = 10 * time.Minute
+		cfg.JobTimeout = 30 * time.Minute
 	}
 	if cfg.DiscordToken == "" {
 		return cfg, ErrMissingToken
@@ -107,17 +117,91 @@ func Load() (Config, error) {
 // ErrMissingToken means the user still needs setup.
 var ErrMissingToken = fmt.Errorf("discord token is not set")
 
-// DefaultConfigPath returns the preferred on-disk YAML config location.
-func DefaultConfigPath() string {
-	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "pi-bridge", "config.yaml")
+// Dir returns the XDG-style config directory for pi-bridge:
+// $XDG_CONFIG_HOME/pi-bridge, or ~/.config/pi-bridge when unset.
+func Dir() string {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "pi-bridge")
 	}
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return "pi-bridge.yaml"
+	if err != nil || home == "" {
+		return "pi-bridge"
 	}
-	return filepath.Join(home, ".pi-bridge.yaml")
+	return filepath.Join(home, ".config", "pi-bridge")
 }
+
+// DefaultConfigPath returns the preferred on-disk YAML config location.
+func DefaultConfigPath() string {
+	return filepath.Join(Dir(), "config.yaml")
+}
+
+// DefaultHomeDir is the default assistant workspace (agent cwd).
+func DefaultHomeDir() string {
+	return filepath.Join(Dir(), "home")
+}
+
+// DefaultWorkRoot is where the agent keeps code checkouts by default.
+func DefaultWorkRoot() string {
+	return filepath.Join(Dir(), "work")
+}
+
+// EnsureHome creates the assistant home and seeds AGENTS.md if missing.
+// Safe to call on every start; does not overwrite existing files.
+func EnsureHome(home string) error {
+	if home == "" {
+		home = DefaultHomeDir()
+	}
+	if err := os.MkdirAll(filepath.Join(home, "docs", "solutions"), 0o700); err != nil {
+		return fmt.Errorf("create assistant home: %w", err)
+	}
+	agents := filepath.Join(home, "AGENTS.md")
+	if _, err := os.Stat(agents); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.WriteFile(agents, []byte(defaultAgentsMD), 0o644); err != nil {
+		return fmt.Errorf("seed AGENTS.md: %w", err)
+	}
+	return nil
+}
+
+// EnsureWorkRoot creates the code work root and a .sandboxes dir.
+func EnsureWorkRoot(workRoot string) error {
+	if workRoot == "" {
+		workRoot = DefaultWorkRoot()
+	}
+	if err := os.MkdirAll(filepath.Join(workRoot, ".sandboxes"), 0o700); err != nil {
+		return fmt.Errorf("create work root: %w", err)
+	}
+	return nil
+}
+
+// EnsureWorkspace prepares home + work roots for a running bot.
+func EnsureWorkspace(cfg Config) error {
+	if err := EnsureHome(cfg.Home); err != nil {
+		return err
+	}
+	return EnsureWorkRoot(cfg.WorkRoot)
+}
+
+const defaultAgentsMD = `# Assistant home
+
+You are the user's Discord-installed coding and personal assistant (pi-bridge).
+
+This directory is your default workspace — identity, notes, and durable learnings live here.
+Code checkouts live in the configured **work root** (sibling directory work/ under the pi-bridge config dir by default), not in this home.
+
+## Guidelines
+
+- Prefer working in this home for personal tasks, planning, and memory.
+- Clone and manage repos under the work root; prefer an existing clone there over cloning again.
+- New clones: <work_root>/<repo-name>. Throwaways: <work_root>/.sandboxes/<name>.
+- Prefer git worktrees under an existing clone for parallel branches.
+- Only edit trees outside home/work when the user clearly asks.
+- Capture reusable learnings under docs/solutions/ so future sessions can reuse them.
+- Keep secrets out of committed files; this home is local user data.
+`
 
 // Save writes configuration as YAML (mode 0600).
 func Save(path string, cfg Config) error {
@@ -135,6 +219,7 @@ func Save(path string, cfg Config) error {
 		}
 	}
 
+	normalizePaths(&cfg)
 	fc := toFileConfig(cfg)
 	b, err := yaml.Marshal(&fc)
 	if err != nil {
@@ -150,15 +235,18 @@ func Save(path string, cfg Config) error {
 }
 
 func defaults() Config {
+	home := DefaultHomeDir()
 	return Config{
 		RequireMention:   true,
-		DefaultCWD:       mustGetwd(),
+		Home:             home,
+		WorkRoot:         DefaultWorkRoot(),
+		DefaultCWD:       home,
 		QueueSize:        64,
 		Workers:          1,
-		JobTimeout:       10 * time.Minute,
+		JobTimeout:       30 * time.Minute,
 		PiBinary:         "pi",
-		SessionDir:       defaultSessionDir(),
-		SessionIndexPath: defaultSessionIndexPath(),
+		SessionDir:       filepath.Join(Dir(), "sessions"),
+		SessionIndexPath: filepath.Join(Dir(), "session-index.json"),
 		PersistSessions:  true,
 	}
 }
@@ -213,6 +301,12 @@ func loadLegacyEnvFile(path string, cfg *Config) error {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.RequireMention = b
 		}
+	}
+	if v := vals["PI_HOME"]; v != "" {
+		cfg.Home = v
+	}
+	if v := vals["PI_WORK_ROOT"]; v != "" {
+		cfg.WorkRoot = v
 	}
 	if v := vals["PI_CWD"]; v != "" {
 		cfg.DefaultCWD = v
@@ -269,6 +363,12 @@ func mergeFileConfig(cfg *Config, fc fileConfig) {
 		cfg.RequireMention = *fc.Discord.RequireMention
 	}
 
+	if fc.Pi.Home != "" {
+		cfg.Home = fc.Pi.Home
+	}
+	if fc.Pi.WorkRoot != "" {
+		cfg.WorkRoot = fc.Pi.WorkRoot
+	}
 	if fc.Pi.CWD != "" {
 		cfg.DefaultCWD = fc.Pi.CWD
 	}
@@ -317,6 +417,8 @@ func toFileConfig(cfg Config) fileConfig {
 			RequireMention:  &require,
 		},
 		Pi: filePi{
+			Home:            cfg.Home,
+			WorkRoot:        cfg.WorkRoot,
 			CWD:             cfg.DefaultCWD,
 			Binary:          cfg.PiBinary,
 			Args:            append([]string(nil), cfg.PiArgs...),
@@ -360,6 +462,12 @@ func applyEnvOverrides(cfg *Config) {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.RequireMention = b
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv("PI_HOME")); v != "" {
+		cfg.Home = v
+	}
+	if v := strings.TrimSpace(os.Getenv("PI_WORK_ROOT")); v != "" {
+		cfg.WorkRoot = v
 	}
 	if v := strings.TrimSpace(os.Getenv("PI_CWD")); v != "" {
 		cfg.DefaultCWD = v
@@ -406,18 +514,25 @@ func resolveConfigPath() string {
 		return p
 	}
 
-	// Prefer local project files, then user config dir (YAML before legacy dotenv).
+	// Prefer local project files, then XDG config, then legacy locations.
 	candidates := []string{
 		"pi-bridge.yaml",
 		"pi-bridge.yml",
 		"pi-bridge.env",
 		DefaultConfigPath(),
+		filepath.Join(Dir(), "config.yml"),
+		filepath.Join(Dir(), "config.env"),
 	}
+	// macOS Application Support and other os.UserConfigDir paths (pre-XDG installs).
 	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		candidates = append(candidates,
-			filepath.Join(dir, "pi-bridge", "config.yml"),
-			filepath.Join(dir, "pi-bridge", "config.env"),
-		)
+		legacy := filepath.Join(dir, "pi-bridge")
+		if legacy != Dir() {
+			candidates = append(candidates,
+				filepath.Join(legacy, "config.yaml"),
+				filepath.Join(legacy, "config.yml"),
+				filepath.Join(legacy, "config.env"),
+			)
+		}
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates,
@@ -433,6 +548,50 @@ func resolveConfigPath() string {
 	}
 	// Default write target when nothing exists yet.
 	return DefaultConfigPath()
+}
+
+// normalizePaths fills Home/WorkRoot/CWD defaults after file + env merge.
+func normalizePaths(cfg *Config) {
+	cfg.Home = expandPath(cfg.Home)
+	cfg.WorkRoot = expandPath(cfg.WorkRoot)
+	cfg.DefaultCWD = expandPath(cfg.DefaultCWD)
+	cfg.SessionDir = expandPath(cfg.SessionDir)
+	cfg.SessionIndexPath = expandPath(cfg.SessionIndexPath)
+
+	if cfg.Home == "" {
+		cfg.Home = DefaultHomeDir()
+	}
+	if cfg.WorkRoot == "" {
+		cfg.WorkRoot = DefaultWorkRoot()
+	}
+	if cfg.DefaultCWD == "" {
+		cfg.DefaultCWD = cfg.Home
+	}
+	if cfg.SessionDir == "" {
+		cfg.SessionDir = filepath.Join(Dir(), "sessions")
+	}
+	if cfg.SessionIndexPath == "" {
+		cfg.SessionIndexPath = filepath.Join(Dir(), "session-index.json")
+	}
+}
+
+func expandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return p
+	}
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return p
+	}
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(os.PathSeparator)) {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
 }
 
 func parseEnvFile(path string) (map[string]string, error) {
@@ -513,32 +672,4 @@ func isLegacyEnvPath(path string) bool {
 	return ext == ".env" || strings.HasSuffix(strings.ToLower(path), ".env")
 }
 
-func mustGetwd() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
-}
 
-func defaultSessionDir() string {
-	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "pi-bridge", "sessions")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "pi-bridge-sessions"
-	}
-	return filepath.Join(home, ".pi-bridge", "sessions")
-}
-
-func defaultSessionIndexPath() string {
-	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "pi-bridge", "session-index.json")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "session-index.json"
-	}
-	return filepath.Join(home, ".pi-bridge", "session-index.json")
-}

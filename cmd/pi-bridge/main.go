@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/vitaraliseng/pi-bridge/internal/config"
 	"github.com/vitaraliseng/pi-bridge/internal/discord"
@@ -172,8 +173,14 @@ func runBot(log *slog.Logger, cfg config.Config) error {
 		}()
 	}
 
+	if err := config.EnsureWorkspace(cfg); err != nil {
+		return err
+	}
+
 	log.Info("pi-bridge running",
 		"workers", cfg.Workers,
+		"home", cfg.Home,
+		"work_root", cfg.WorkRoot,
 		"cwd", cfg.DefaultCWD,
 		"queue", cfg.QueueSize,
 		"config", cfg.ConfigPath,
@@ -186,7 +193,19 @@ func runBot(log *slog.Logger, cfg config.Config) error {
 	<-ctx.Done()
 	log.Info("shutting down")
 	q.Close()
-	wg.Wait()
+	// Kill pi processes before waiting on workers so RunPrompt/Abort cannot block forever.
+	pool.Close()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Warn("workers did not exit in time; continuing shutdown")
+	}
 	return nil
 }
 
@@ -206,8 +225,12 @@ Install:
 Config is YAML (lists for user/guild IDs). Discovery order:
   $PI_BRIDGE_CONFIG
   ./pi-bridge.yaml
-  $XDG_CONFIG_HOME/pi-bridge/config.yaml  (or ~/Library/Application Support/pi-bridge on macOS)
-  legacy: ./pi-bridge.env or config.env (still read; setup rewrites to .yaml)
+  $XDG_CONFIG_HOME/pi-bridge/config.yaml  (default: ~/.config/pi-bridge/config.yaml)
+  legacy: Application Support / .env paths (still read; setup writes XDG YAML)
+
+Default paths under $XDG_CONFIG_HOME/pi-bridge (or ~/.config/pi-bridge):
+  home/   assistant brain (default cwd)
+  work/   code checkouts (work_root)
 
 Environment variables always override the config file.
 `, version)

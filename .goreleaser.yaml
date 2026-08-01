@@ -77,6 +77,29 @@ brews:
     # Skip brew push if token missing (binary release still succeeds).
     skip_upload: auto
 
+# Ubuntu/Debian packages (linux only). Install: sudo dpkg -i pi-bridge_*.deb
+nfpms:
+  - id: deb
+    package_name: pi-bridge
+    file_name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- if eq .Arch "amd64" }}amd64
+      {{- else }}{{ .Arch }}{{ end }}
+    homepage: https://github.com/vitaraliseng/pi-bridge
+    maintainer: Cabe Waldrop <cabe.waldrop1985@gmail.com>
+    description: Discord front-end for the pi coding agent
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/bin
+    section: utils
+    priority: optional
+    contents:
+      - src: deploy/pi-bridge.service
+        dst: /usr/lib/systemd/user/pi-bridge.service
+        type: config|noreplace
+
 release:
   github:
     owner: vitaraliseng

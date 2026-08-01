@@ -36,6 +36,29 @@ go install github.com/vitaraliseng/pi-bridge/cmd/pi-bridge@latest
 
 Binaries for macOS/Linux/Windows are attached to each [release](https://github.com/vitaraliseng/pi-bridge/releases).
 
+### Linux (GitHub release binary)
+
+Works on Ubuntu (x86_64 and arm64/Jetson):
+
+```bash
+# one-liner (latest)
+curl -fsSL https://raw.githubusercontent.com/vitaraliseng/pi-bridge/trunk/scripts/install-linux.sh | bash
+
+# or pin a version
+curl -fsSL https://raw.githubusercontent.com/vitaraliseng/pi-bridge/trunk/scripts/install-linux.sh | bash -s -- v0.4.0
+```
+
+Release assets include:
+
+| Asset | Target |
+|-------|--------|
+| `pi-bridge_*_linux_arm64.tar.gz` | Ubuntu arm64 (Jetson) |
+| `pi-bridge_*_linux_x86_64.tar.gz` | Ubuntu amd64 |
+| `pi-bridge_*_arm64.deb` / `_amd64.deb` | `dpkg -i` (optional) |
+
+After install, put the binary on your `PATH` (`~/.local/bin`), configure `~/.config/pi-bridge/config.yaml`, ensure `pi` works, then run `pi-bridge` (or a user systemd unit).
+
+
 ### From this repo
 
 ```bash
@@ -98,9 +121,28 @@ Preferred path (first existing wins):
 
 - `$PI_BRIDGE_CONFIG`
 - `./pi-bridge.yaml`
-- macOS: `~/Library/Application Support/pi-bridge/config.yaml`
-- Linux: `~/.config/pi-bridge/config.yaml`
-- Legacy dotenv (`pi-bridge.env` / `config.env`) is still **read**; `pi-bridge setup` rewrites to `.yaml`
+- `$XDG_CONFIG_HOME/pi-bridge/config.yaml` (default **`~/.config/pi-bridge/config.yaml`**)
+- Legacy: macOS Application Support / dotenv paths are still **read**; `pi-bridge setup` writes XDG YAML
+
+### Assistant home vs work root
+
+On first run / setup, pi-bridge creates a hidden product tree (no `~/dev` clutter):
+
+```text
+~/.config/pi-bridge/
+  config.yaml
+  session-index.json
+  sessions/             # Discord thread session files
+  home/                 # default pi cwd (brain)
+    AGENTS.md           # seeded once; edit freely
+    docs/solutions/     # durable learnings
+  work/                 # default work_root (code clones)
+    .sandboxes/         # throwaway checkouts
+```
+
+- **home** — identity, memory, planning; default agent cwd
+- **work** — clone repos here as needed; prefer worktrees under an existing clone
+- Override `pi.work_root` only if you want clones elsewhere
 
 Example:
 
@@ -116,16 +158,18 @@ discord:
   require_mention: true
 
 pi:
-  cwd: "/Users/you/dev/my-project"
+  # defaults under ~/.config/pi-bridge/
+  home: ""        # …/home
+  work_root: ""   # …/work
+  cwd: ""         # defaults to home
   binary: pi
   args: []
   persist_sessions: true
-  # session_dir / session_index default under the user config dir
 
 bridge:
   workers: 1
   queue_size: 64
-  job_timeout: 10m
+  job_timeout: 30m
 ```
 
 ## Run
@@ -143,7 +187,9 @@ Environment variables still **override** the YAML file (useful for secrets in la
 | `ALLOWED_USER_IDS` | `discord.allowed_user_ids` | Comma-separated override of the YAML list |
 | `ALLOWED_GUILD_IDS` | `discord.allowed_guild_ids` | Comma-separated server IDs |
 | `REQUIRE_MENTION` | `discord.require_mention` | Server messages must @mention the bot |
-| `PI_CWD` | `pi.cwd` | Working directory for pi tools |
+| `PI_HOME` | `pi.home` | Assistant home (identity / default workspace) |
+| `PI_WORK_ROOT` | `pi.work_root` | Where code clones live (default `…/work`) |
+| `PI_CWD` | `pi.cwd` | Working directory for pi tools (defaults to home) |
 | `PI_BINARY` | `pi.binary` | Path to pi executable |
 | `PI_ARGS` | `pi.args` | Extra args after `--mode rpc` (space-separated) |
 | `PI_PERSIST_SESSIONS` | `pi.persist_sessions` | Resume pi sessions across restarts |

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Client talks to a pi process in RPC mode over stdin/stdout JSONL.
@@ -143,21 +144,36 @@ func (c *Client) Call(ctx context.Context, cmd Command) (Response, error) {
 	}
 }
 
+// Image is a multimodal image for pi RPC prompt commands.
+type Image struct {
+	Type     string `json:"type"` // "image"
+	Data     string `json:"data"` // base64
+	MimeType string `json:"mimeType"`
+}
+
 // Prompt sends a user message. Fails if the agent is already streaming
 // unless you use PromptWithBehavior.
-func (c *Client) Prompt(ctx context.Context, message string) error {
-	_, err := c.Call(ctx, Command{"type": "prompt", "message": message})
+func (c *Client) Prompt(ctx context.Context, message string, images []Image) error {
+	cmd := Command{"type": "prompt", "message": message}
+	if len(images) > 0 {
+		cmd["images"] = images
+	}
+	_, err := c.Call(ctx, cmd)
 	return err
 }
 
 // PromptWithBehavior queues a message while streaming.
 // behavior is "steer" or "followUp".
-func (c *Client) PromptWithBehavior(ctx context.Context, message, behavior string) error {
-	_, err := c.Call(ctx, Command{
+func (c *Client) PromptWithBehavior(ctx context.Context, message, behavior string, images []Image) error {
+	cmd := Command{
 		"type":              "prompt",
 		"message":           message,
 		"streamingBehavior": behavior,
-	})
+	}
+	if len(images) > 0 {
+		cmd["images"] = images
+	}
+	_, err := c.Call(ctx, cmd)
 	return err
 }
 
@@ -215,16 +231,16 @@ func (c *Client) SetSessionName(ctx context.Context, name string) error {
 
 // RunPrompt sends a prompt and waits until the agent fully settles.
 // onProgress is optional and receives status/tool/text updates.
-func (c *Client) RunPrompt(ctx context.Context, message string, onProgress func(Progress)) (string, error) {
+func (c *Client) RunPrompt(ctx context.Context, message string, images []Image, onProgress func(Progress)) (string, error) {
 	c.runMu.Lock()
 	defer c.runMu.Unlock()
 
 	// Drain any stale events from a previous run.
 	c.drainEvents()
 
-	if err := c.Prompt(ctx, message); err != nil {
+	if err := c.Prompt(ctx, message, images); err != nil {
 		// If already streaming, queue as follow-up.
-		if err2 := c.PromptWithBehavior(ctx, message, "followUp"); err2 != nil {
+		if err2 := c.PromptWithBehavior(ctx, message, "followUp", images); err2 != nil {
 			return "", err
 		}
 	}
@@ -238,8 +254,9 @@ func (c *Client) RunPrompt(ctx context.Context, message string, onProgress func(
 	for {
 		select {
 		case <-ctx.Done():
-			// Best-effort abort; ignore errors on shutdown.
-			_ = c.Abort(context.Background())
+			// Best-effort abort with a hard cap — never block shutdown/job cancel
+			// waiting for pi (e.g. long-running bash that ignores abort briefly).
+			c.abortBestEffort()
 			return "", ctx.Err()
 		case ev, ok := <-c.events:
 			if !ok {
@@ -253,6 +270,14 @@ func (c *Client) RunPrompt(ctx context.Context, message string, onProgress func(
 			}
 		}
 	}
+}
+
+const abortWait = 2 * time.Second
+
+func (c *Client) abortBestEffort() {
+	ctx, cancel := context.WithTimeout(context.Background(), abortWait)
+	defer cancel()
+	_ = c.Abort(ctx)
 }
 
 func (c *Client) handleEvent(ctx context.Context, ev Event, emit func(Progress)) error {
@@ -399,7 +424,21 @@ func (c *Client) dispatch(line []byte) {
 }
 
 // Close terminates the pi process.
+// It does not wait forever: if Wait stalls, the process is killed.
 func (c *Client) Close() error {
 	_ = c.stdin.Close()
-	return c.cmd.Wait()
+	if c.cmd.Process == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- c.cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		_ = c.cmd.Process.Kill()
+		return <-done
+	}
 }

@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -33,7 +35,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		w.Log = slog.Default()
 	}
 	if w.Timeout == 0 {
-		w.Timeout = 10 * time.Minute
+		w.Timeout = 30 * time.Minute
 	}
 
 	for {
@@ -67,10 +69,20 @@ func (w *Worker) handle(parent context.Context, job queue.Job) {
 		return
 	}
 
-	text, err := client.RunPrompt(ctx, job.Prompt, func(p pi.Progress) {
+	images := make([]pi.Image, 0, len(job.Images))
+	for _, img := range job.Images {
+		images = append(images, pi.Image{
+			Type:     "image",
+			Data:     img.Data,
+			MimeType: img.MimeType,
+		})
+	}
+
+	text, err := client.RunPrompt(ctx, job.Prompt, images, func(p pi.Progress) {
 		w.Sink.OnProgress(ctx, job, p)
 	})
 	if err != nil {
+		err = annotateTimeout(err, w.Timeout)
 		log.Error("prompt failed", "err", err)
 		w.Sink.OnError(ctx, job, err)
 		return
@@ -80,4 +92,12 @@ func (w *Worker) handle(parent context.Context, job queue.Job) {
 		log.Error("sink complete failed", "err", err)
 	}
 	log.Info("job complete", "chars", len(text))
+}
+
+// annotateTimeout turns a bare context deadline into an actionable job error.
+func annotateTimeout(err error, timeout time.Duration) error {
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("job timed out after %s (raise bridge.job_timeout / JOB_TIMEOUT for long agent runs): %w", timeout, err)
 }

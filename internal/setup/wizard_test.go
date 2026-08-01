@@ -81,6 +81,7 @@ func TestRunWizardHappyPath(t *testing.T) {
 		"",           // accept default allowed user (owner)
 		"n",          // no guild restrict
 		"",           // default cwd
+		"",           // default work_root
 		"y",          // require mention
 		"n",          // don't start now
 		"",

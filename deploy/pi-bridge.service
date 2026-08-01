@@ -1,0 +1,15 @@
+[Unit]
+Description=pi-bridge Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:%h/go/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h
+ExecStart=/usr/bin/pi-bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

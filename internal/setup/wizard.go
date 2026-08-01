@@ -221,12 +221,16 @@ func Run(opts Options) (Result, error) {
 
 	// --- Step 5: Preferences ---
 	step(out, 5, 5, "Optional preferences")
+	home := config.DefaultHomeDir()
+	work := config.DefaultWorkRoot()
 	cfg := config.Config{
 		DiscordToken:         token,
 		DiscordApplicationID: appID,
 		AllowedUserIDs:       allowedUsers,
 		RequireMention:       true,
-		DefaultCWD:           mustGetwd(),
+		Home:                 home,
+		WorkRoot:             work,
+		DefaultCWD:           home,
 	}
 
 	fmt.Fprintln(out, `  A Discord "server" is also called a guild.`)
@@ -236,9 +240,15 @@ func Run(opts Options) (Result, error) {
 		cfg.AllowedGuildIDs = parseIDList(raw)
 	}
 
-	cwd := promptDefault(in, out, "Working directory for pi tools (PI_CWD)", cfg.DefaultCWD)
+	fmt.Fprintln(out, "  Assistant home = brain (AGENTS, memory). Work root = code clones.")
+	fmt.Fprintln(out, "  Both default under XDG config (hidden); override work root if you prefer.")
+	cwd := promptDefault(in, out, "Agent workspace / cwd (pi.cwd)", cfg.DefaultCWD)
 	if cwd != "" {
 		cfg.DefaultCWD = cwd
+	}
+	wr := promptDefault(in, out, "Code work root (pi.work_root)", cfg.WorkRoot)
+	if wr != "" {
+		cfg.WorkRoot = wr
 	}
 	cfg.RequireMention = confirm(in, out, "Require @mention in top-level channels?", true)
 	fmt.Fprintln(out)
@@ -253,6 +263,9 @@ func Run(opts Options) (Result, error) {
 	if err := config.Save(path, cfg); err != nil {
 		return Result{}, err
 	}
+	if err := config.EnsureWorkspace(cfg); err != nil {
+		return Result{}, err
+	}
 	cfg.ConfigPath = path
 	// Point Load() at the YAML we just wrote (env still overrides if set).
 	_ = os.Setenv("PI_BRIDGE_CONFIG", path)
@@ -260,7 +273,11 @@ func Run(opts Options) (Result, error) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "✓ Setup complete!")
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "Allowed users: %s\n", joinIDs(cfg.AllowedUserIDs))
+	fmt.Fprintf(out, "Config:          %s\n", path)
+	fmt.Fprintf(out, "Assistant home:  %s\n", cfg.Home)
+	fmt.Fprintf(out, "Work root:       %s\n", cfg.WorkRoot)
+	fmt.Fprintf(out, "Agent cwd:       %s\n", cfg.DefaultCWD)
+	fmt.Fprintf(out, "Allowed users:   %s\n", joinIDs(cfg.AllowedUserIDs))
 	if len(cfg.AllowedGuildIDs) > 0 {
 		fmt.Fprintf(out, "Allowed servers (guilds): %s\n", joinIDs(cfg.AllowedGuildIDs))
 	}
@@ -403,9 +420,15 @@ func existingConfigCandidates(targetPath string) []string {
 
 	// When using the default location, also probe other historical defaults.
 	if targetPath == config.DefaultConfigPath() {
+		add(filepath.Join(config.Dir(), "config.env"))
+		add(filepath.Join(config.Dir(), "config.yml"))
 		if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-			add(filepath.Join(dir, "pi-bridge", "config.env"))
-			add(filepath.Join(dir, "pi-bridge", "config.yml"))
+			legacy := filepath.Join(dir, "pi-bridge")
+			if legacy != config.Dir() {
+				add(filepath.Join(legacy, "config.yaml"))
+				add(filepath.Join(legacy, "config.yml"))
+				add(filepath.Join(legacy, "config.env"))
+			}
 		}
 		if home, err := os.UserHomeDir(); err == nil {
 			add(filepath.Join(home, ".pi-bridge.yaml"))
@@ -546,10 +569,4 @@ func displayPath(path string) string {
 	return path
 }
 
-func mustGetwd() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
-}
+
