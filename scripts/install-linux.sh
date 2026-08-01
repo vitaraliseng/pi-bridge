@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 # Install latest pi-bridge release for this Linux machine (amd64/arm64).
 set -euo pipefail
+
+download() {
+  # $1 url  $2 dest
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1"
+  else
+    echo "need curl or wget" >&2
+    exit 1
+  fi
+}
+
+fetch() {
+  # print body of URL to stdout
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$1"
+  else
+    echo "need curl or wget" >&2
+    exit 1
+  fi
+}
 REPO="${PI_BRIDGE_REPO:-vitaraliseng/pi-bridge}"
 PREFIX="${PI_BRIDGE_PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
@@ -26,7 +50,7 @@ else
 fi
 
 echo "Resolving ${tag} from ${REPO}..."
-json=$(curl -fsSL "$api")
+json=$(fetch "$api")
 version=$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 version_num=${version#v}
 asset="pi-bridge_${version_num}_linux_${goreleaser_arch}.tar.gz"
@@ -41,7 +65,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 echo "Downloading $url"
-curl -fsSL "$url" -o "$tmp/$asset"
+download "$url" "$tmp/$asset"
 tar -xzf "$tmp/$asset" -C "$tmp"
 install -m 755 "$tmp/pi-bridge" "$BIN_DIR/pi-bridge"
 echo "Installed $version -> $BIN_DIR/pi-bridge"
